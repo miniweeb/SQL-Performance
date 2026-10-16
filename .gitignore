@@ -1,0 +1,18 @@
+# Dữ liệu và mô hình: không đưa lên repo.
+# Các folder này được script tự tạo lại khi chạy (hàm ensure_dirs trong src/config.py).
+data/
+models/
+
+# Kết quả (hình, bảng) có thể sinh lại;
+reports/
+
+# Python: file biên dịch tạm và môi trường ảo
+__pycache__/
+*.pyc
+.venv/
+.ipynb_checkpoints/
+
+# Hệ điều hành, trình soạn thảo và file khóa tạm của Excel
+Thumbs.db
+.vscode/
+~$*.csv
