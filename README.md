@@ -42,9 +42,8 @@ Dự án tiếp cận theo hướng ngược lại: dùng estimated execution pl
 Pipeline gồm các bước:
 
 - Parse execution plan dạng text và trích xuất feature
-- EDA để chọn ngưỡng label và loại các feature trùng lặp
-- Manual labeling ba mức dựa trên số liệu sau khi chạy
-- Kiểm tra độ nhất quán của labeling trước khi huấn luyện
+- Tiền xử lý và EDA: kiểm tra giá trị thiếu, phát hiện outlier, phân tích phân phối và tương quan, loại feature hằng, hiếm và trùng lặp
+- Gán label ba mức tự động theo quy tắc trên số liệu sau khi chạy, kèm kiểm tra độ nhạy của ngưỡng
 - Huấn luyện các mô hình tree-based, so sánh với hai baseline
 - Đánh giá bằng Repeated Stratified K-Fold CV
 - Đóng gói thành Streamlit app
@@ -66,9 +65,9 @@ Do yêu cầu bảo mật của ngân hàng, dữ liệu vận hành thật khô
 
 | Thuộc tính | Giá trị |
 |---|---|
-| Số lần chạy (bản ghi) | 90 |
-| Số query gốc | khoảng 20 (mỗi query có 1 đến 8 phiên bản tuning) |
-| Số feature | 30 (trước khi loại feature không đổi và trùng lặp) |
+| Số lần chạy (bản ghi) | 64 |
+| Số query gốc | 32 (mỗi query có 1 đến 4 lần chạy, thuộc các phiên bản V1 đến V9) |
+| Số feature | 30 (trước khi loại feature không đổi, feature hiếm và feature trùng lặp) |
 | Label | 3 mức có thứ bậc: Normal < Warning < Critical |
 
 ### Các File Trong Mỗi Lần Chạy
@@ -101,9 +100,8 @@ Câu hỏi nghiên cứu:
 flowchart LR
     subgraph P["Pipeline"]
         A[01_extract_features<br/>feature extraction] --> B[02_eda<br/>EDA]
-        B --> C[03_suggest_labels<br/>manual labeling]
-        C --> D[04 / 06<br/>label consistency]
-        D --> E[06_train_evaluate<br/>training, evaluation]
+        B --> C[03_label_data<br/>rule-based labeling]
+        C --> E[04_train_evaluate<br/>training, evaluation]
         E --> F[(model.pkl)]
     end
     F --> G[streamlit_app.py<br/>Streamlit]
@@ -118,18 +116,16 @@ Hàm parse plan và hàm tính feature trong `src/common.py` được dùng chun
 ## Pipeline
 
 ```
-00_check_env → 01_extract_features → 02_eda → 03_suggest_labels → 04_relabel_sample → 05_label_agreement → 06_train_evaluate → app
+00_check_env → 01_extract_features → 02_eda → 03_label_data → 04_train_evaluate → app
 ```
 
 | Bước | File | Mục đích |
 |---|---|---|
 | 1 | `00_check_env.py` | Kiểm tra phiên bản Python và thư viện |
 | 2 | `01_extract_features.py` | Trích xuất feature, số liệu để labeling, đối chiếu estimated plan với actual plan |
-| 3 | `02_eda.py` | Phân phối elapsed time, Spearman correlation, các cặp feature trùng lặp |
-| 4 | `03_suggest_labels.py` | Tạo bảng labeling kèm gợi ý theo ngưỡng |
-| 5 | `04_relabel_sample.py` | Tạo bảng relabel "mù" cho 20% số mẫu |
-| 6 | `05_label_agreement.py` | Đo độ nhất quán giữa hai lần labeling bằng weighted Kappa |
-| 7 | `06_train_evaluate.py` | Training, CV, permutation importance, lưu model |
+| 3 | `02_eda.py` | Kiểm tra giá trị thiếu, loại feature hằng và feature hiếm, phát hiện outlier (chỉ báo cáo), phân phối elapsed time, Spearman correlation, loại các cặp feature trùng lặp; ghi `features_clean.csv` (kèm cột `ref_est_time_s` cho baseline) |
+| 4 | `03_label_data.py` | Gán label tự động theo quy tắc, ghi kèm quy tắc đã kích hoạt; dời ngưỡng ±10% và đo tỉ lệ label bị đổi |
+| 5 | `04_train_evaluate.py` | Training, CV, permutation importance, lưu model |
 | App | `streamlit_app.py` | Dự báo và so sánh các phiên bản query |
 | Dùng chung | `common.py`, `config.py` | Parse plan, tính feature, đọc `summary.json`, so sánh cấu trúc plan; khai báo đường dẫn |
 
@@ -143,12 +139,17 @@ Hàm parse plan và hàm tính feature trong `src/common.py` được dùng chun
 
 ### Giai Đoạn 2: Feature Engineering
 - Chỉ dùng thông tin có trước khi chạy; elapsed time, CPU time và buffer gets sau khi chạy chỉ dùng để labeling
-- Loại feature không đổi và các cặp có Spearman correlation từ 0,90 trở lên
+- Giá trị thiếu: điền bằng trung vị của feature
+- Outlier: phát hiện bằng IQR (1,5 × IQR) trên feature liên tục và chỉ báo cáo, giữ nguyên giá trị vì các query lớn là quan sát thật và thuộc lớp cần dự báo; cờ 0/1 và feature có tối đa 4 giá trị khác nhau không xét outlier
+- Loại feature không đổi và feature hiếm (ít hơn 5 lần chạy có giá trị khác giá trị phổ biến nhất của feature)
+- Loại các cặp feature có Spearman correlation từ 0,90 trở lên, giữ feature đứng trước trong danh sách; mọi feature bị loại và lý do ghi trong `feature_filter.csv`
+- Hồi quy logistic dùng thêm biến đổi `log1p` và chuẩn hóa; mô hình dựa trên cây dùng giá trị gốc
 
 ### Giai Đoạn 3: Labeling
 - Ngưỡng theo ý nghĩa vận hành, tham khảo phân phối elapsed time; tên label theo hai mức cảnh báo Warning/Critical của OEM
-- Manual labeling từng bản ghi, đối chiếu thêm tỉ lệ CPU, wait time, mức dùng temp space
-- Sau vài ngày, relabel 20% số mẫu và đo độ nhất quán; chỉ chuyển sang training khi độ nhất quán đạt yêu cầu
+- Gán label tự động bằng quy tắc xác định sẵn (chỉ số chính, ngưỡng, quy tắc nâng bậc, thứ tự ưu tiên); mỗi bản ghi lưu kèm quy tắc đã kích hoạt
+- Cơ sở của từng ngưỡng và quy tắc: `docs/LABEL_RULES.md`
+- Độ nhạy của ngưỡng: dời từng ngưỡng ±10% và đo tỉ lệ bản ghi đổi label
 
 ### Giai Đoạn 4: Modeling
 
@@ -156,11 +157,13 @@ Hàm parse plan và hàm tính feature trong `src/common.py` được dùng chun
 |---|---|---|
 | Baseline 1 | Majority class (luôn đoán lớp phổ biến nhất) | Mức kết quả tối thiểu |
 | Baseline 2 | Hai ngưỡng trên estimated time (`Time`), học trên training set | Phép thử giá trị của ML |
-| ML | DT, RF, GB | Mô hình dự báo |
+| ML | DT, RF, GB, hồi quy logistic | Mô hình dự báo; siêu tham số cố định từ trước, không tinh chỉnh theo kết quả |
 
 ### Giai Đoạn 5: Evaluation
-- Repeated Stratified K-Fold CV, 5 fold × 10 lần lặp; các phiên bản của cùng một query gốc nằm trong cùng một fold
-- Chỉ số chính: macro-F1 (trung bình ± độ lệch chuẩn); chỉ số phụ: QWK, accuracy
+- Stratified Group K-Fold, 5 fold × 10 lần lặp; các phiên bản của cùng một query gốc nằm trong cùng một fold; không có tập test riêng
+- Chỉ số chính: macro-F1 (trung bình ± độ lệch chuẩn giữa các fold); chỉ số phụ: QWK, accuracy; F1 train chỉ dùng để chẩn đoán overfit
+- Mọi bước có học từ dữ liệu, kể cả ngưỡng của baseline, chỉ học trên phần train của từng fold; mô hình cuối cho app được huấn luyện lại trên toàn bộ dữ liệu
+- Kiểm tra bổ sung: nhãn bị xáo trộn (kiểm tra rò rỉ), bỏ các lần chạy ngày cao điểm, chia fold không phân tầng, learning curve
 - Permutation importance trên test set để đo mức ảnh hưởng của từng feature
 
 ---
@@ -184,16 +187,25 @@ Hàm parse plan và hàm tính feature trong `src/common.py` được dùng chun
 
 | Chức năng | Mô tả |
 |---|---|
-| Dự báo | Nạp một file `plan_estimated.txt`, nhận label dự báo kèm độ tin cậy |
-| So sánh phiên bản | Nạp nhiều file cùng lúc, nhận bảng so sánh và gợi ý phiên bản nên chạy thật |
+| Dự báo | Nạp các file `plan_estimated.txt`, nhận label dự báo, xác suất từng mức và điểm rủi ro 0 đến 100 |
+| So sánh phiên bản | Chọn phiên bản gốc, xem chênh lệch điểm rủi ro và xếp hạng các phiên bản |
+| Khác biệt plan | Chênh lệch estimated time, cost, số bước, full scan, join, sort, partition, temp space so với phiên bản gốc |
+| Giải thích | Các feature làm điểm rủi ro của một phiên bản cao hơn hoặc thấp hơn phiên bản gốc |
 
-> TODO: thêm ảnh chụp màn hình app.
+![Giao diện so sánh phiên bản](docs/images/app_so_sanh_phien_ban.png)
+
+Chạy app: `streamlit run app/streamlit_app.py`
 
 ---
 
 ## Hạn Chế
 
-- **Tính đại diện của dataset:** dữ liệu phần lớn là phiên bản đã qua tuning; không phản ánh biến động tải vào giờ cao điểm.
+- **Quy mô dataset:** 64 bản ghi từ 32 query gốc; cross-validation chia theo nhóm query nên số đơn vị độc lập là 32 và độ lệch chuẩn của kết quả lớn. Chia theo nhóm tránh để các phiên bản của cùng một query nằm ở cả train và test, nên điểm thấp hơn nhưng không bị thổi phồng. Learning curve cho thấy macro-F1 của hồi quy logistic tăng từ 0,32 lên 0,59 khi số query huấn luyện tăng từ 30% lên 100%, nên thêm query độc lập là hướng cải thiện chính.
+- **Định nghĩa label:** quy tắc nâng bậc khi tràn đĩa đóng góp 8 trong 17 bản ghi Critical; label phụ thuộc vào định nghĩa này. Tràn đĩa là dấu hiệu thiếu bộ nhớ, tốn tài nguyên ngoài thời gian chạy, nên được giữ trong định nghĩa; model dự báo kết quả của chính quy tắc này.
+- **Ngày cao điểm:** 7 bản ghi chạy vào ngày cao điểm có elapsed cao hơn khoảng 1,6 đến 2,6 lần; kết quả được báo cáo cả khi có và khi bỏ các bản ghi này. Giữ các bản ghi này vì tải cao điểm là điều kiện vận hành thật, và báo cáo cả hai trường hợp để thấy mức phụ thuộc.
+- **Độ nhạy ngưỡng:** dời ngưỡng ±10% làm đổi label của 1,6% đến 4,7% bản ghi. Hai ngưỡng nằm trong các khoảng trống của phân phối elapsed nên ít bản ghi nằm sát ngưỡng.
+- **Tín hiệu của estimated plan:** Spearman giữa estimated time và elapsed thực tế là 0,42. Estimated plan chỉ phản ánh cấu trúc truy vấn, không biết tải hệ thống và dữ liệu thực tế lúc chạy, nên đây là giới hạn của đầu vào chứ không phải của thuật toán.
+- **Hiệu quả dự báo:** macro-F1 trên tập test cao nhất là 0,59 (hồi quy logistic) so với 0,41 của baseline dựa trên estimated time; có overfit rõ (F1 train 0,71 đến 1,00); điểm phụ thuộc cách chia fold (0,59 khi phân tầng, 0,48 khi không phân tầng). Model được dùng để xếp thứ tự ưu tiên kiểm tra các phiên bản, không thay thế việc chạy thử; với nhãn xáo trộn điểm rơi về mức ngẫu nhiên (0,27 đến 0,30) nên kết quả không đến từ rò rỉ dữ liệu.
 
 ---
 
@@ -217,8 +229,8 @@ Hàm parse plan và hàm tính feature trong `src/common.py` được dùng chun
 sql-plan-resource-prediction/
 ├── data/
 │   ├── raw/                  # Các folder lần chạy
-│   ├── interim/              # features.csv, label_sheet.csv, check_report.csv
-│   └── labeled/              # labels.csv, relabel_sheet.csv
+│   ├── interim/              # features.csv, features_clean.csv, check_report.csv
+│   └── labeled/              # labels.csv, label_sensitivity.csv
 ├── environment/
 │   └── requirements.txt
 ├── src/
@@ -227,10 +239,8 @@ sql-plan-resource-prediction/
 │   ├── 00_check_env.py
 │   ├── 01_extract_features.py
 │   ├── 02_eda.py
-│   ├── 03_suggest_labels.py
-│   ├── 04_relabel_sample.py
-│   ├── 05_label_agreement.py
-│   └── 06_train_evaluate.py
+│   ├── 03_label_data.py
+│   └── 04_train_evaluate.py
 ├── app/
 │   └── streamlit_app.py
 ├── models/                   # model.pkl, run_info.json
@@ -238,7 +248,8 @@ sql-plan-resource-prediction/
 │   ├── figures/              # eda/, results/
 │   └── tables/               # eda/, results/
 ├── docs/
-│   └── HUONG_DAN.md
+│   ├── images/               # Ảnh chụp app
+│   └── LABEL_RULES.md
 ├── main.ipynb
 ├── .gitignore
 └── README.md
@@ -258,18 +269,6 @@ python -m pip install -r environment/requirements.txt
 python src/00_check_env.py
 ```
 
-## Trạng Thái
-
-| Hạng mục | Trạng thái |
-|---|---|
-| Chuẩn bị môi trường | Chưa thực hiện |
-| Feature extraction | Chưa thực hiện |
-| EDA | Chưa thực hiện |
-| Manual labeling | Chưa thực hiện |
-| Độ nhất quán labeling | Chưa thực hiện |
-| Training và evaluation | Chưa thực hiện |
-| Streamlit app | Chưa thực hiện |
-
 ---
 
 ## Tác Giả
@@ -281,8 +280,6 @@ python src/00_check_env.py
 ## Tài Liệu Tham Khảo
 
 - Kasa, S. R., et al. (2024). *Exploring Ordinality in Text Classification: A Comparative Study of Explicit and Implicit Techniques.* Findings of ACL 2024.
-- Li, M., Gao, Q., & Yu, T. (2023). *Kappa statistic considerations in evaluating inter-rater reliability between two raters.* BMC Cancer, 23, 799.
-- Vanbelle, S., & Hernandez Engelhart, C. (2024). *A comprehensive guide to study the agreement and reliability of multi-observer ordinal data.* BMC Medical Research Methodology.
 - Oracle. *Enterprise Manager Cloud Control: Metric Thresholds.*
 - Oracle. *Database SQL Tuning Guide: DBMS_XPLAN và SQL Monitor.*
 - scikit-learn documentation: model selection, ensemble methods, permutation importance.
