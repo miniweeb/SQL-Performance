@@ -13,15 +13,18 @@ ROOT = Path(__file__).resolve().parents[1]
 # 1. Dữ Liệu
 DATA_DIR = ROOT / "data"
 RAW_DIR = DATA_DIR / "raw"            
-INTERIM_DIR = DATA_DIR / "interim"    # kết quả trích xuất: features, label_sheet, check_report
-LABELED_DIR = DATA_DIR / "labeled"    # file gán label thủ công
+INTERIM_DIR = DATA_DIR / "interim"    # kết quả trích xuất: features, features_clean, check_report
+LABELED_DIR = DATA_DIR / "labeled"    # label gán tự động và kiểm tra độ nhạy ngưỡng
 
 FEATURES_CSV = INTERIM_DIR / "features.csv"
-LABEL_SHEET_CSV = INTERIM_DIR / "label_sheet.csv"
+FEATURES_CLEAN_CSV = INTERIM_DIR / "features_clean.csv"
 CHECK_REPORT_CSV = INTERIM_DIR / "check_report.csv"
 ERRORS_CSV = INTERIM_DIR / "errors.csv"
 LABELS_CSV = LABELED_DIR / "labels.csv"
-RELABEL_CSV = LABELED_DIR / "relabel_sheet.csv"
+SENSITIVITY_CSV = LABELED_DIR / "label_sensitivity.csv"
+
+# Ngày hệ thống tải nặng: elapsed của các lần chạy trong ngày này cao hơn ngày thường.
+PEAK_DAY = "2026-09-03"
 
 # 2. Mô Hình
 MODELS_DIR = ROOT / "models"
